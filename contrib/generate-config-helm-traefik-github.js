@@ -1,28 +1,63 @@
 const jwt = require("jsonwebtoken");
 const yaml = require("yaml");
 const utils = require("../src/utils");
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
-const config_token_sign_secret =
-  process.env.EAS_CONFIG_TOKEN_SIGN_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_TOKEN_SIGN_SECRET env variable");
-const config_token_encrypt_secret =
-  process.env.EAS_CONFIG_TOKEN_ENCRYPT_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_TOKEN_ENCRYPT_SECRET env variable");
-const config_issuer_sign_secret =
-  process.env.EAS_CONFIG_ISSUER_SIGN_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_ISSUER_SIGN_SECRET env variable");
-const config_issuer_encrypt_secret =
-  process.env.EAS_CONFIG_ISSUER_ENCRYPT_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_ISSUER_ENCRYPT_SECRET env variable");
-const config_cookie_sign_secret =
-  process.env.EAS_CONFIG_COOKIE_SIGN_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_COOKIE_SIGN_SECRET env variable");
-const config_cookie_encrypt_secret =
-  process.env.EAS_CONFIG_COOKIE_ENCRYPT_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_COOKIE_ENCRYPT_SECRET env variable");
-const config_session_encrypt_secret =
-  process.env.EAS_CONFIG_SESSION_ENCRYPT_SECRET ||
-  utils.exit_failure("missing EAS_CONFIG_SESSION_ENCRYPT_SECRET env variable");
+let config_token_sign_secret
+let config_token_encrypt_secret
+let config_issuer_sign_secret
+let config_issuer_encrypt_secret
+let config_cookie_sign_secret
+let config_cookie_encrypt_secret
+let config_session_encrypt_secret
+
+if (process.env.EAS_CONFIG_TOKEN_SIGN_SECRET == undefined) {
+  config_token_sign_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_token_sign_secret = process.env.EAS_CONFIG_TOKEN_SIGN_SECRET;
+}
+if (process.env.EAS_CONFIG_TOKEN_ENCRYPT_SECRET == undefined) {
+  config_token_encrypt_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_token_encrypt_secret = process.env.EAS_CONFIG_TOKEN_ENCRYPT_SECRET;
+}
+if (process.env.EAS_CONFIG_ISSUER_SIGN_SECRET == undefined) {
+  config_issuer_sign_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_issuer_sign_secret = process.env.EAS_CONFIG_ISSUER_SIGN_SECRET;
+}
+if (process.env.EAS_CONFIG_ISSUER_ENCRYPT_SECRET == undefined) {
+  config_issuer_encrypt_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_issuer_encrypt_secret = process.env.EAS_CONFIG_ISSUER_ENCRYPT_SECRET;
+}
+if (process.env.EAS_CONFIG_COOKIE_SIGN_SECRET == undefined) {
+  config_cookie_sign_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_cookie_sign_secret = process.env.EAS_CONFIG_COOKIE_SIGN_SECRET;
+}
+if (process.env.EAS_CONFIG_COOKIE_ENCRYPT_SECRET == undefined) {
+  config_cookie_encrypt_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_cookie_encrypt_secret = process.env.EAS_CONFIG_COOKIE_ENCRYPT_SECRET;
+}
+if (process.env.EAS_CONFIG_SESSION_ENCRYPT_SECRET == undefined) {
+  config_session_encrypt_secret = crypto.randomBytes(32).toString('hex');
+} else {
+  config_session_encrypt_secret = process.env.EAS_CONFIG_SESSION_ENCRYPT_SECRET;
+}
+
+let redact_secrets = false;
+if (process.env.REDACT_SECRETS === undefined) {
+  redact_secrets = false;
+} else if (process.env.REDACT_SECRETS === "true") {
+  redact_secrets = true;
+} else {
+  redact_secrets = false;
+}
+
 const github_client_id =
   process.env.EAS_GITHUB_CLIENT_ID ||
   utils.exit_failure("missing EAS_GITHUB_CLIENT_ID env variable");
@@ -32,6 +67,7 @@ const github_client_secret =
 const github_team_ids =
   process.env.EAS_GITHUB_TEAM_IDS.replace(/"/g,'').split(' ').map(x => Number(x)) ||
   utils.exit_failure("missing EAS_GITHUB_TEAM_IDS env variable");
+
 const base_domain =
   process.env.EAS_BASE_DOMAIN ||
   utils.exit_failure("missing EAS_BASE_DOMAIN env variable");
@@ -174,9 +210,6 @@ let config_token_alias = {
 
 };
 
-console.log("Token real config: \n%s", JSON.stringify(config_token_real, null, 4));
-console.log("");
-
 config_token_real_jwt = jwt.sign(config_token_real, config_token_sign_secret);
 const config_token_real_encrypted = utils.encrypt(
   config_token_encrypt_secret,
@@ -185,9 +218,6 @@ const config_token_real_encrypted = utils.encrypt(
 
 config_token_real_encrypted_uri = encodeURIComponent(config_token_real_encrypted);
 
-
-console.log("Token alias config: \n%s", JSON.stringify(config_token_alias, null, 4));
-console.log("");
 
 config_token_alias_jwt = jwt.sign(config_token_alias, config_token_sign_secret);
 const config_token_alias_encrypted = utils.encrypt(
@@ -252,9 +282,54 @@ const ingress_config = {
   "ingress.kubernetes.io/auth-type": "forward"
 }
 
-console.log("Helm values for central external-auth-server deployment: \n\n%s", yaml.stringify(helm_config));
-console.log("");
+const secret = {
+  apiVersion: "v1",
+  data: {
+    "config-token-encrypt-secret": utils.base64_encode(config_token_encrypt_secret),
+    "config-token-sign-secret": utils.base64_encode(config_token_sign_secret),
+    "cookie-encrypt-secret": utils.base64_encode(config_cookie_sign_secret),
+    "cookie-sign-secret": utils.base64_encode(config_cookie_sign_secret),
+    "issuer-encrypt-secret": utils.base64_encode(config_cookie_encrypt_secret),
+    "issuer-sign-secret": utils.base64_encode(config_issuer_sign_secret),
+    "session-encrypt-secret": utils.base64_encode(config_session_encrypt_secret),
+    "config-token-stores": utils.base64_encode(JSON.stringify(helm_config.configTokenStores, null, 4)),
+    "config-tokens": utils.base64_encode(JSON.stringify(helm_config.configTokens, null, 4)),
+  },
+  kind: "Secret",
+  metadata: {
+    labels: {
+      "app.kubernetes.io/instance": "external-auth-server",
+      "app.kubernetes.io/managed-by": "generate-config-helm-traefik-github.js",
+      "app.kubernetes.io/name": "external-auth-server"
+    },
+    name: "external-auth-server",
+    namespace: "kube-system",
+  },
+  type: "Opaque"
+}
 
-console.log("Ingress annotations for each protected application (crypted query param): \n\n%s", yaml.stringify({...ingress_config, "ingress.kubernetes.io/auth-url": `https://eas.${base_domain}/verify?config_token=${config_token_alias_encrypted_uri}` }));
+if (process.env.SECERET_FILE != undefined) {
+  console.log("Writing secret file to: %s", process.env.SECERET_FILE);
+  console.log("");
+  fs.writeFileSync(path.resolve(process.env.SECERET_FILE), yaml.stringify(secret));
+}
+
+
+if(redact_secrets == false) {
+  console.log("Token real config: \n%s", JSON.stringify(config_token_real, null, 4));
+  console.log("");
+
+
+  console.log("Token alias config: \n%s", JSON.stringify(config_token_alias, null, 4));
+  console.log("");
+
+  console.log("Helm values for central external-auth-server deployment: \n\n%s", yaml.stringify(helm_config));
+  console.log("");
+
+  console.log("Kubernetes secret for central external-auth-server deployment: \n\n%s", yaml.stringify(secret));
+  console.log("");
+}
+
+//console.log("Ingress annotations for each protected application (crypted query param): \n\n%s", yaml.stringify({...ingress_config, "ingress.kubernetes.io/auth-url": `https://eas.${base_domain}/verify?config_token=${config_token_alias_encrypted_uri}` }));
 console.log("Ingress annotations for each protected application (plain query params): \n\n%s", yaml.stringify({...ingress_config, "ingress.kubernetes.io/auth-url": `https://eas.${base_domain}/verify?config_token_id=${config_token_id}&config_token_store_id=${config_token_store_id}`}));
 console.log("");
